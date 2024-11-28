@@ -52,7 +52,7 @@ extern "C" {
 #  endif
 # endif
 
-# include <VialerPJSIP/sys/types.h>
+# include <sys/types.h>
 
 # define SEED_BLOCK_SIZE 16
 # define SEED_KEY_LENGTH 16

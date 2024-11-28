@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 # include <stddef.h>
-# include <VialerPJSIP/sys/types.h>
+# include <sys/types.h>
 
 /*
  * These names are outdated as of OpenSSL 1.1; a future release

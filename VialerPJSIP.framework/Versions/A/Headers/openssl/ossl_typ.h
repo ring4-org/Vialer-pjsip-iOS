@@ -10,7 +10,7 @@
 #ifndef HEADER_OPENSSL_TYPES_H
 # define HEADER_OPENSSL_TYPES_H
 
-#include <VialerPJSIP/limits.h>
+#include <limits.h>
 
 #ifdef  __cplusplus
 extern "C" {
@@ -109,6 +109,7 @@ typedef struct dsa_method DSA_METHOD;
 
 typedef struct rsa_st RSA;
 typedef struct rsa_meth_st RSA_METHOD;
+typedef struct rsa_pss_params_st RSA_PSS_PARAMS;
 
 typedef struct ec_key_st EC_KEY;
 typedef struct ec_key_method_st EC_KEY_METHOD;
