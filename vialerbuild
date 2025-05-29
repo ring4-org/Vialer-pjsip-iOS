@@ -3,6 +3,7 @@ set -e
 
 AVIALABLE_ARCHS=(
     "arm64"
+    "x86_64"
 )
 export BASE_DIR=`pwd -P`
 export MIN_IOS_VERSION="16.0"
@@ -376,7 +377,7 @@ function build_opus () {
     MINIOSVERSION=$MIN_IOS_VERSION
     OPT_CFLAGS="-Ofast -flto"
     OPT_LDFLAGS="-flto"
-    ARCHS=$USE_ARCHS
+    ARCHS=("${USE_ARCHS[@]}")
     
     opus_repo_dir=$OPUS_BUILD_DIR
     opus_output_dir="${opus_repo_dir}/dependencies"
@@ -416,11 +417,14 @@ function build_opus () {
     fi
     set -e
 
-    for arch in ${ARCHS}; do
+    for arch in "${ARCHS[@]}"; do
+        echo "Processing ${arch}..."
         if [ "${arch}" == "x86_64" ]; then
             PLATFORM="iPhoneSimulator"
             SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
-            EXTRA_CONFIG="--host=x86_64-apple-darwin"
+            EXTRA_CONFIG="--host=x86_64-apple-darwin --disable-rtcd"
+            export CFLAGS="-arch x86_64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+            export LDFLAGS="-arch x86_64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
         else
             PLATFORM="iPhoneOS"
             SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -446,7 +450,7 @@ function build_opus () {
     opus_output_libs="libopus.a"
     for opus_output_lib in ${opus_output_libs}; do
         opus_input_libs=""
-        for arch in ${ARCHS}; do
+        for arch in "${ARCHS[@]}"; do
             if [ "${arch}" == "x86_64" ]; then
                 PLATFORM="iPhoneSimulator"
             else
@@ -469,7 +473,7 @@ function build_opus () {
 
     echo "Copying headers..."
 
-    for arch in ${ARCHS}; do
+    for arch in "${ARCHS[@]}"; do
         if [ "${arch}" == "x86_64" ]; then
             PLATFORM="iPhoneSimulator"
         else
@@ -574,6 +578,16 @@ function configure_arm64 () {
     echo "Configure for arm64"
     export CFLAGS="-miphoneos-version-min=$MIN_IOS_VERSION"
     export LDFLAGS=
+}
+
+function configure_x86_64 () {
+    echo "Configure for x86_64"
+    export DEVPATH=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer
+    export CFLAGS="-O2 -m64 -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=$MIN_IOS_VERSION"
+    export LDFLAGS="-O2 -m64 -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=$MIN_IOS_VERSION"
+    export MIN_IOS="-mios-simulator-version-min=$MIN_IOS_VERSION"
+    export PLATFORM="iPhoneSimulator"
+    export SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
 }
 
 function _build () {
