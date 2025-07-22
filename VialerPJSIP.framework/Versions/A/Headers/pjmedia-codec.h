@@ -34,6 +34,7 @@
 #include <VialerPJSIP/pjmedia-codec/ilbc.h>
 #include <VialerPJSIP/pjmedia-codec/ipp_codecs.h>
 #include <VialerPJSIP/pjmedia-codec/l16.h>
+#include <VialerPJSIP/pjmedia-codec/lyra.h>
 #include <VialerPJSIP/pjmedia-codec/opencore_amr.h>
 #include <VialerPJSIP/pjmedia-codec/openh264.h>
 #include <VialerPJSIP/pjmedia-codec/opus.h>

@@ -27,7 +27,7 @@
  */
 
 /* Canonical OS name */
-#define PJ_OS_NAME "arm64-apple-darwin_ios"
+#define PJ_OS_NAME "x86_64-apple-darwin_ios"
 
 /* Legacy macros */
 /* #undef PJ_WIN64 */
@@ -227,10 +227,10 @@
 
 /* SSL socket availability. */
 #ifndef PJ_HAS_SSL_SOCK
-#define PJ_HAS_SSL_SOCK 1
+/* #undef PJ_HAS_SSL_SOCK */
 #endif
 #ifndef PJ_SSL_SOCK_IMP
-#define PJ_SSL_SOCK_IMP PJ_SSL_SOCK_IMP_OPENSSL
+/* #undef PJ_SSL_SOCK_IMP */
 #endif
 
 /* Has pthread_np.h ? */

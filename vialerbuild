@@ -22,7 +22,7 @@ export HAS_BITCODE=false
 export HAS_IPV6=true
 export SHOW_HELP=false
 
-export PJSIP_VERSION="2.14.1"
+export PJSIP_VERSION="2.15.1"
 export PJSIP_BASE_URL="http://svn.pjsip.org/repos/pjproject"
 export PJSIP_DIR="$BASE_DIR/pjsip"
 export PJSIP_FINAL_LIB_DIR="$BASE_DIR/lib"

@@ -27,8 +27,10 @@
 
 #include <VialerPJSIP/pj/activesock.h>
 #include <VialerPJSIP/pj/addr_resolv.h>
+#include <VialerPJSIP/pj/argparse.h>
 #include <VialerPJSIP/pj/array.h>
 #include <VialerPJSIP/pj/assert.h>
+#include <VialerPJSIP/pj/atomic_queue.h>
 #include <VialerPJSIP/pj/ctype.h>
 #include <VialerPJSIP/pj/errno.h>
 #include <VialerPJSIP/pj/except.h>
@@ -55,6 +57,7 @@
 #include <VialerPJSIP/pj/string.h>
 #include <VialerPJSIP/pj/timer.h>
 #include <VialerPJSIP/pj/unicode.h>
+#include <VialerPJSIP/pj/unittest.h>
 
 #include <VialerPJSIP/pj/compat/high_precision.h>
 

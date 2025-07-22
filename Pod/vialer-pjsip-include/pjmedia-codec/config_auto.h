@@ -99,6 +99,11 @@
 /* #undef PJMEDIA_HAS_ANDROID_MEDIACODEC */
 #endif
 
+/* Lyra codec */
+#ifndef PJMEDIA_HAS_LYRA_CODEC
+#define PJMEDIA_HAS_LYRA_CODEC 0
+#endif
+
 #endif  /* __PJMEDIA_CODEC_CONFIG_AUTO_H_ */
 
 

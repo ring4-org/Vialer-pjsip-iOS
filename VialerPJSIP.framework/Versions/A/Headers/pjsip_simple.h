@@ -33,6 +33,7 @@
 #ifndef __PJSIP_SIMPLE_H__
 #define __PJSIP_SIMPLE_H__
 
+#include <VialerPJSIP/pjsip-simple/dlg_event.h>
 #include <VialerPJSIP/pjsip-simple/evsub.h>
 #include <VialerPJSIP/pjsip-simple/evsub_msg.h>
 #include <VialerPJSIP/pjsip-simple/iscomposing.h>
