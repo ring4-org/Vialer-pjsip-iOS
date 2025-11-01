@@ -3,7 +3,7 @@ set -e
 
 AVIALABLE_ARCHS=(
     "arm64"
-    "x86_64"
+    "arm64-simulator"
 )
 export BASE_DIR=`pwd -P`
 export MIN_IOS_VERSION="16.0"
@@ -15,7 +15,7 @@ export DOWNLOAD_PJSIP_SRC=true
 export CLEAN_PJSIP_SRC=true
 export SSL_SUPPORT=true
 export OPUS_SUPPORT=true
-export H264_SUPPORT=true
+export H264_SUPPORT=false
 export INDEPENDENT_WEBRTC=false
 export ENABLE_ZRTP=false
 export HAS_BITCODE=false
@@ -39,7 +39,6 @@ export PJSIP_LIB_PATHS=(
     "third_party/lib"
 )
 export PJSIP_LIB_OUTPUT="$BASE_DIR/lib"
-
 export BUILD_DIR="$PJSIP_DIR/external"
 export SSL_BUILD_DIR="$BUILD_DIR/ssl"
 export ZRTP_BUILD_DIR="$BUILD_DIR/zrtp"
@@ -126,7 +125,7 @@ function show_help () {
     echo "Default the script will compile for all architectures. But without ssl, opus and video support."
     echo
     echo " -a, --arch                   Compile for specific architecture. Input the architectures comma separated."
-    echo "                              If empty all architectures will be build (armv7,armv7s,arm64,i386,x86_64)"
+    echo "                              Available: arm64, arm64-simulator, x86_64"
     echo
     echo " -h264, --h264, h264          Wheter to include h264/video support in PJSIP.  (default: not build)"
     echo
@@ -156,8 +155,9 @@ function show_help () {
     echo
     echo " -v, --version, version       Version info"
     echo
-    echo " Example usage: ./vialerbuild --ssl --opus --h264 --arch=armv7,i386,arm64"
-    echo " This will compile the newest pjsip version for the three architectures armv7,i386,arm64. With SSL encryption, H264 and the Opus codec."
+    echo " Example usage: ./vialerbuild_all --ssl --opus --h264"
+    echo " This will compile the newest pjsip version for arm64 device and simulator. With SSL encryption, H264 and the Opus codec."
+    echo " The output will be a VialerPJSIP.xcframework that works on both iOS devices and simulators."
     exit 1
 }
 
@@ -207,6 +207,9 @@ function build_h264 () {
 
     h264_lipo_args=""
     for arch in "${USE_ARCHS[@]}"; do
+        # Map our arch names to actual arch for building
+        actual_arch="${arch%%-*}"  # Remove -simulator suffix if present
+        
         h264_makefile="Makefile"
         h264_makefile_bak="Makefile.bak"
         h264_prefix="${H264_BUILD_DIR}/build/${arch}"
@@ -234,28 +237,53 @@ function build_h264 () {
         rm ${h264_makefile}.deleteme
 
         echo "--- Run make file for ${arch}"
-        make OS=ios ARCH=${arch} SDK_MIN=${MIN_IOS_VERSION} v=No >> "${h264_log}"  || exit
-        make OS=ios ARCH=${arch} SDK_MIN=${MIN_IOS_VERSION} v=No install >> "${h264_log}" || exit
-        make OS=ios ARCH=${arch} SDK_MIN=${MIN_IOS_VERSION} v=No clean >> "${h264_log}" || exit
+        make OS=ios ARCH=${actual_arch} SDK_MIN=${MIN_IOS_VERSION} v=No >> "${h264_log}"  || exit
+        make OS=ios ARCH=${actual_arch} SDK_MIN=${MIN_IOS_VERSION} v=No install >> "${h264_log}" || exit
+        make OS=ios ARCH=${actual_arch} SDK_MIN=${MIN_IOS_VERSION} v=No clean >> "${h264_log}" || exit
 
         mv "${h264_makefile_bak}" "${h264_makefile}"
 
         popd > /dev/null
 
-        h264_lipo_args="${h264_lipo_args} -arch ${arch} ${H264_BUILD_DIR}/build/${arch}/lib/libopenh264.a"
+        h264_lipo_args="${h264_lipo_args} -arch ${actual_arch} ${H264_BUILD_DIR}/build/${arch}/lib/libopenh264.a"
     done
 
-    if [ ! -d "${H264_BUILD_DIR}/lib" ]; then
-        mkdir -p "${H264_BUILD_DIR}/lib"
-    fi
+    echo "Organizing H264 libraries by platform..."
+    
+    mkdir -p "${H264_BUILD_DIR}/lib/device"
+    mkdir -p "${H264_BUILD_DIR}/lib/simulator"
 
-    echo "--- Lipo openH264"
-    xcrun -sdk iphoneos lipo ${h264_lipo_args} -create -output "${H264_BUILD_DIR}/lib/libopenh264.a" || exit
+    for arch in "${USE_ARCHS[@]}"; do
+        actual_arch="${arch%%-*}"  # Remove -simulator suffix if present
+        h264_lib="${H264_BUILD_DIR}/build/${arch}/lib/libopenh264.a"
+        
+        if [ -f "$h264_lib" ]; then
+            if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+                # Simulator libs
+                if [ ! -f "${H264_BUILD_DIR}/lib/simulator/libopenh264.a" ]; then
+                    cp "$h264_lib" "${H264_BUILD_DIR}/lib/simulator/libopenh264.a"
+                else
+                    # Combine multiple simulator archs with lipo
+                    xcrun lipo "${H264_BUILD_DIR}/lib/simulator/libopenh264.a" "$h264_lib" -create -output "${H264_BUILD_DIR}/lib/simulator/libopenh264.a.tmp"
+                    mv "${H264_BUILD_DIR}/lib/simulator/libopenh264.a.tmp" "${H264_BUILD_DIR}/lib/simulator/libopenh264.a"
+                fi
+            else
+                # Device libs
+                if [ ! -f "${H264_BUILD_DIR}/lib/device/libopenh264.a" ]; then
+                    cp "$h264_lib" "${H264_BUILD_DIR}/lib/device/libopenh264.a"
+                else
+                    # Combine multiple device archs with lipo
+                    xcrun lipo "${H264_BUILD_DIR}/lib/device/libopenh264.a" "$h264_lib" -create -output "${H264_BUILD_DIR}/lib/device/libopenh264.a.tmp"
+                    mv "${H264_BUILD_DIR}/lib/device/libopenh264.a.tmp" "${H264_BUILD_DIR}/lib/device/libopenh264.a"
+                fi
+            fi
+        fi
+    done
 
     echo "--- Copying header files"
     cp -R "${H264_BUILD_DIR}/build/${USE_ARCHS[0]}/include/" "${H264_BUILD_DIR}/include"
 
-    echo "Done compiling openh264"
+    echo "Done compiling openh264 (platform-specific libraries)"
 }
 
 function build_ssl () {
@@ -270,78 +298,131 @@ function build_ssl () {
     rm -rf $SSL_BUILD_DIR/include
     rm -rf $SSL_BUILD_DIR/src
     rm -rf $SSL_BUILD_DIR/bin
+    rm -rf $SSL_BUILD_DIR/output
 
     mkdir -p $SSL_BUILD_DIR/lib
     mkdir -p $SSL_BUILD_DIR/include
-    mkdir -p $SSL_BUILD_DIR/src
 
-    pushd . > /dev/null
-    cd $SSL_BUILD_DIR
+    # Build for each architecture
+    for arch in "${USE_ARCHS[@]}"; do
+        echo "Building OpenSSL for ${arch}..."
+        
+        # Determine platform and actual arch
+        if [[ "$arch" == "arm64-simulator" ]]; then
+            PLATFORM="iPhoneSimulator"
+            ACTUAL_ARCH="arm64"
+            SDK_NAME="iphonesimulator"
+            MIN_VERSION_FLAG="-mios-simulator-version-min"
+            CONFIGURE_TARGET="ios64-cross"
+        elif [[ "$arch" == "x86_64" ]]; then
+            PLATFORM="iPhoneSimulator"
+            ACTUAL_ARCH="x86_64"
+            SDK_NAME="iphonesimulator"
+            MIN_VERSION_FLAG="-mios-simulator-version-min"
+            CONFIGURE_TARGET="ios64-cross"
+        else
+            PLATFORM="iPhoneOS"
+            ACTUAL_ARCH="arm64"
+            SDK_NAME="iphoneos"
+            MIN_VERSION_FLAG="-miphoneos-version-min"
+            CONFIGURE_TARGET="ios64-cross"
+        fi
 
-    # Download OpenSSL if not already present
-    if [ ! -f "openssl-OpenSSL_1_1_1w.tar.gz" ]; then
-        echo "Downloading openssl-1.1.1w.tar.gz..."
-        curl -LO https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
-    fi
+        mkdir -p $SSL_BUILD_DIR/src-${arch}
+        
+        pushd . > /dev/null
+        cd $SSL_BUILD_DIR
 
-    # Extract OpenSSL
-    tar zxf OpenSSL_1_1_1w.tar.gz -C src --strip 1
+        # Download OpenSSL if not already present
+        if [ ! -f "OpenSSL_1_1_1w.tar.gz" ]; then
+            echo "Downloading openssl-1.1.1w.tar.gz..."
+            curl -LO https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
+        fi
 
-    # Set environment variables and configuration for iOS build
-    SDKVERSION=$IOS_SDK_VERSION
-    MINIOSVERSION=$MIN_IOS_VERSION
-    ARCH="arm64"
-    PLATFORM="iPhoneOS"
-    DEVELOPER=$(xcode-select -print-path)
-    SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-    TARGETDIR="$SSL_BUILD_DIR/output/$PLATFORM$SDKVERSION-$ARCH.sdk"
-    mkdir -p "$TARGETDIR"
+        # Extract OpenSSL for this arch
+        tar zxf OpenSSL_1_1_1w.tar.gz -C src-${arch} --strip 1
 
-    # Set CFLAGS and LDFLAGS to ensure the SDK and headers are found
-    export CROSS_TOP="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
-    export CROSS_SDK="${PLATFORM}${SDKVERSION}.sdk"
-    export BUILD_TOOLS="${DEVELOPER}"
-    export CC="$(xcrun --sdk iphoneos -find clang)"
-    export CFLAGS="-arch $ARCH -isysroot $SDK_PATH -miphoneos-version-min=$MINIOSVERSION"
-    export LDFLAGS="-arch $ARCH -isysroot $SDK_PATH"
+        SDKVERSION=$IOS_SDK_VERSION
+        MINIOSVERSION=$MIN_IOS_VERSION
+        DEVELOPER=$(xcode-select -print-path)
+        SDK_PATH=$(xcrun --sdk ${SDK_NAME} --show-sdk-path)
+        TARGETDIR="$SSL_BUILD_DIR/output/${arch}"
+        mkdir -p "$TARGETDIR"
 
-    echo "Building OpenSSL for $PLATFORM $SDKVERSION $ARCH..."
+        # Set CFLAGS and LDFLAGS to ensure the SDK and headers are found
+        export CROSS_TOP="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
+        export CROSS_SDK="${PLATFORM}${SDKVERSION}.sdk"
+        export BUILD_TOOLS="${DEVELOPER}"
+        export CC="$(xcrun --sdk ${SDK_NAME} -find clang)"
+        export CFLAGS="-arch $ACTUAL_ARCH -isysroot $SDK_PATH ${MIN_VERSION_FLAG}=$MINIOSVERSION"
+        export LDFLAGS="-arch $ACTUAL_ARCH -isysroot $SDK_PATH"
 
-    cd src
+        echo "Building OpenSSL for $PLATFORM $SDKVERSION $ACTUAL_ARCH..."
 
-    ./Configure ios64-cross no-shared no-dso no-hw no-engine --prefix="$TARGETDIR" \
-      --openssldir="$TARGETDIR/ssl" \
-      -fembed-bitcode \
-      no-async || exit 1
+        cd src-${arch}
 
-    # Build and install OpenSSL
-    make -j$(sysctl -n hw.logicalcpu) || exit 1
-    make install_sw || exit 1
+	BITCODE_FLAG=""
+	if [ $HAS_BITCODE = true ]; then
+	    BITCODE_FLAG="-fembed-bitcode"
+	fi
 
-    echo "Cleaning up and organizing OpenSSL build files..."
+        ./Configure ${CONFIGURE_TARGET} no-shared no-dso no-hw no-engine --prefix="$TARGETDIR" \
+          --openssldir="$TARGETDIR/ssl" \
+	  ${BITCODE_FLAG} \
+	  no-async || exit 1
 
-    # Move the libraries to the correct directory
-    if [ -f "$TARGETDIR/lib/libssl.a" ] && [ -f "$TARGETDIR/lib/libcrypto.a" ]; then
-        mv "$TARGETDIR/lib/libssl.a" "$SSL_BUILD_DIR/lib/"
-        mv "$TARGETDIR/lib/libcrypto.a" "$SSL_BUILD_DIR/lib/"
-    else
-        echo "Error: OpenSSL library files not found!"
-        exit 1
-    fi
+        # Build and install OpenSSL
+        make -j$(sysctl -n hw.logicalcpu) || exit 1
+        make install_sw || exit 1
+        make clean
 
-    # Move the include headers
-    if [ -d "$TARGETDIR/include/openssl" ]; then
-        mv "$TARGETDIR/include/openssl" "$SSL_BUILD_DIR/include/"
-    else
-        echo "Error: OpenSSL headers not found!"
-        exit 1
-    fi
+        popd > /dev/null
+    done
+
+    echo "Organizing OpenSSL libraries by platform..."
+
+    # Copy headers from first arch
+    cp -R "$SSL_BUILD_DIR/output/${USE_ARCHS[0]}/include/openssl" "$SSL_BUILD_DIR/include/"
+
+    # Organize libraries by platform instead of creating universal binaries
+    mkdir -p "$SSL_BUILD_DIR/lib/device"
+    mkdir -p "$SSL_BUILD_DIR/lib/simulator"
+
+    for arch in "${USE_ARCHS[@]}"; do
+        if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+            # Simulator libs
+            if [ ! -f "$SSL_BUILD_DIR/lib/simulator/libssl.a" ]; then
+                cp "$SSL_BUILD_DIR/output/${arch}/lib/libssl.a" "$SSL_BUILD_DIR/lib/simulator/libssl.a"
+                cp "$SSL_BUILD_DIR/output/${arch}/lib/libcrypto.a" "$SSL_BUILD_DIR/lib/simulator/libcrypto.a"
+            else
+                # If we have multiple simulator archs, combine them with lipo
+                xcrun lipo "$SSL_BUILD_DIR/lib/simulator/libssl.a" "$SSL_BUILD_DIR/output/${arch}/lib/libssl.a" -create -output "$SSL_BUILD_DIR/lib/simulator/libssl.a.tmp"
+                mv "$SSL_BUILD_DIR/lib/simulator/libssl.a.tmp" "$SSL_BUILD_DIR/lib/simulator/libssl.a"
+                xcrun lipo "$SSL_BUILD_DIR/lib/simulator/libcrypto.a" "$SSL_BUILD_DIR/output/${arch}/lib/libcrypto.a" -create -output "$SSL_BUILD_DIR/lib/simulator/libcrypto.a.tmp"
+                mv "$SSL_BUILD_DIR/lib/simulator/libcrypto.a.tmp" "$SSL_BUILD_DIR/lib/simulator/libcrypto.a"
+            fi
+        else
+            # Device libs
+            if [ ! -f "$SSL_BUILD_DIR/lib/device/libssl.a" ]; then
+                cp "$SSL_BUILD_DIR/output/${arch}/lib/libssl.a" "$SSL_BUILD_DIR/lib/device/libssl.a"
+                cp "$SSL_BUILD_DIR/output/${arch}/lib/libcrypto.a" "$SSL_BUILD_DIR/lib/device/libcrypto.a"
+            else
+                # If we have multiple device archs, combine them with lipo
+                xcrun lipo "$SSL_BUILD_DIR/lib/device/libssl.a" "$SSL_BUILD_DIR/output/${arch}/lib/libssl.a" -create -output "$SSL_BUILD_DIR/lib/device/libssl.a.tmp"
+                mv "$SSL_BUILD_DIR/lib/device/libssl.a.tmp" "$SSL_BUILD_DIR/lib/device/libssl.a"
+                xcrun lipo "$SSL_BUILD_DIR/lib/device/libcrypto.a" "$SSL_BUILD_DIR/output/${arch}/lib/libcrypto.a" -create -output "$SSL_BUILD_DIR/lib/device/libcrypto.a.tmp"
+                mv "$SSL_BUILD_DIR/lib/device/libcrypto.a.tmp" "$SSL_BUILD_DIR/lib/device/libcrypto.a"
+            fi
+        fi
+    done
 
     # Clean up
-    rm -rf src
+    for arch in "${USE_ARCHS[@]}"; do
+        rm -rf $SSL_BUILD_DIR/src-${arch}
+    done
     rm -rf "$SSL_BUILD_DIR/output"
-    echo "Done building OpenSSL"
-    popd > /dev/null
+    
+    echo "Done building OpenSSL (platform-specific libraries)"
 }
 
 function build_zrtp () {
@@ -375,9 +456,16 @@ function build_opus () {
     opus_version="1.5.2"
     SDKVERSION=$IOS_SDK_VERSION
     MINIOSVERSION=$MIN_IOS_VERSION
-    OPT_CFLAGS="-Ofast -flto"
-    OPT_LDFLAGS="-flto"
-    ARCHS=("${USE_ARCHS[@]}")
+    #OPT_CFLAGS="-Ofast -flto"
+    #OPT_LDFLAGS="-flto"
+    OPT_CFLAGS="-Ofast"
+    OPT_LDFLAGS=""
+
+    # Add bitcode flag if enabled
+    if [ $HAS_BITCODE = true ]; then
+        OPT_CFLAGS="${OPT_CFLAGS} -fembed-bitcode"
+        OPT_LDFLAGS="${OPT_LDFLAGS} -fembed-bitcode"
+    fi
     
     opus_repo_dir=$OPUS_BUILD_DIR
     opus_output_dir="${opus_repo_dir}/dependencies"
@@ -386,7 +474,6 @@ function build_opus () {
     opus_inter_dir="${opus_build_build_dir}/built"
     
     xcode_dev_path=`xcode-select -print-path`
-    opus_repo_dir=$OPUS_BUILD_DIR
     
     mkdir -p "${opus_output_dir}/include"
     mkdir -p "${opus_output_dir}/lib"
@@ -417,64 +504,94 @@ function build_opus () {
     fi
     set -e
 
-    for arch in "${ARCHS[@]}"; do
-        echo "Processing ${arch}..."
-        if [ "${arch}" == "x86_64" ]; then
+    for arch in "${USE_ARCHS[@]}"; do
+        echo "Processing opus for ${arch}..."
+        
+        # Determine platform and configuration
+        if [[ "$arch" == "arm64-simulator" ]]; then
             PLATFORM="iPhoneSimulator"
+            ACTUAL_ARCH="arm64"
+            SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
+            EXTRA_CONFIG="--host=aarch64-apple-darwin"
+            EXTRA_CFLAGS="-arch arm64 -mios-simulator-version-min=${MINIOSVERSION}"
+            export CFLAGS="-arch arm64 -mios-simulator-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+            export LDFLAGS="-arch arm64 -mios-simulator-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+        elif [[ "$arch" == "x86_64" ]]; then
+            PLATFORM="iPhoneSimulator"
+            ACTUAL_ARCH="x86_64"
             SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
             EXTRA_CONFIG="--host=x86_64-apple-darwin --disable-rtcd"
-            export CFLAGS="-arch x86_64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
-            export LDFLAGS="-arch x86_64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+            EXTRA_CFLAGS="-arch x86_64 -mios-simulator-version-min=${MINIOSVERSION}"
+            export CFLAGS="-arch x86_64 -mios-simulator-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+            export LDFLAGS="-arch x86_64 -mios-simulator-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
         else
             PLATFORM="iPhoneOS"
+            ACTUAL_ARCH="arm64"
             SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
             EXTRA_CONFIG="--host=aarch64-apple-darwin"
+            EXTRA_CFLAGS="-arch arm64 -miphoneos-version-min=${MINIOSVERSION}"
+            export CFLAGS="-arch arm64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
+            export LDFLAGS="-arch arm64 -miphoneos-version-min=${MINIOSVERSION} -isysroot ${SDK_PATH}"
         fi
-
-        EXTRA_CFLAGS="-arch ${arch} -miphoneos-version-min=${MINIOSVERSION}"
 
         mkdir -p "${opus_inter_dir}/${PLATFORM}${SDKVERSION}-${arch}.sdk"
 
         ./configure --disable-shared --enable-static --with-pic --disable-extra-programs --disable-doc --enable-float-approx ${EXTRA_CONFIG} \
         --prefix="${opus_inter_dir}/${PLATFORM}${SDKVERSION}-${arch}.sdk" \
-        LDFLAGS="$LDFLAGS ${OPT_LDFLAGS} -fPIE -L${opus_output_dir}/lib -lSystem" \
-        CFLAGS="$CFLAGS ${EXTRA_CFLAGS} ${OPT_CFLAGS} -fPIE -I${opus_output_dir}/include -isysroot ${SDK_PATH}"
+        LDFLAGS="$LDFLAGS ${OPT_LDFLAGS} -fPIE -lSystem" \
+        CFLAGS="$CFLAGS ${EXTRA_CFLAGS} ${OPT_CFLAGS} -fPIE -isysroot ${SDK_PATH}"
 
         make -j4
         make install
         make clean
     done
 
-    echo "Building Opus library..."
+    echo "Organizing Opus libraries by platform..."
 
-    opus_output_libs="libopus.a"
-    for opus_output_lib in ${opus_output_libs}; do
-        opus_input_libs=""
-        for arch in "${ARCHS[@]}"; do
-            if [ "${arch}" == "x86_64" ]; then
-                PLATFORM="iPhoneSimulator"
-            else
-                PLATFORM="iPhoneOS"
-            fi
+    # Create platform-specific library directories
+    mkdir -p "${opus_output_dir}/lib/device"
+    mkdir -p "${opus_output_dir}/lib/simulator"
 
-            opus_input_arch_lib="${opus_inter_dir}/${PLATFORM}${SDKVERSION}-${arch}.sdk/lib/${opus_output_lib}"
-
-            if [ -e $opus_input_arch_lib ]; then
-                opus_input_libs="${opus_input_libs} ${opus_input_arch_lib}"
-            fi
-        done
-
-        if [ -n "$opus_input_libs" ]; then
-            lipo -create $opus_input_libs -output "${opus_output_dir}/lib/${opus_output_lib}"
+    for arch in "${USE_ARCHS[@]}"; do
+        if [[ "$arch" == "arm64-simulator" ]]; then
+            PLATFORM="iPhoneSimulator"
+        elif [[ "$arch" == "x86_64" ]]; then
+            PLATFORM="iPhoneSimulator"
         else
-            echo "$opus_output_lib does not exist, skipping (are the dependencies installed?)"
+            PLATFORM="iPhoneOS"
+        fi
+
+        opus_input_arch_lib="${opus_inter_dir}/${PLATFORM}${SDKVERSION}-${arch}.sdk/lib/libopus.a"
+        
+        if [ -e $opus_input_arch_lib ]; then
+            if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+                # Simulator libs
+                if [ ! -f "${opus_output_dir}/lib/simulator/libopus.a" ]; then
+                    cp "$opus_input_arch_lib" "${opus_output_dir}/lib/simulator/libopus.a"
+                else
+                    # Combine multiple simulator archs with lipo
+                    xcrun lipo "${opus_output_dir}/lib/simulator/libopus.a" "$opus_input_arch_lib" -create -output "${opus_output_dir}/lib/simulator/libopus.a.tmp"
+                    mv "${opus_output_dir}/lib/simulator/libopus.a.tmp" "${opus_output_dir}/lib/simulator/libopus.a"
+                fi
+            else
+                # Device libs
+                if [ ! -f "${opus_output_dir}/lib/device/libopus.a" ]; then
+                    cp "$opus_input_arch_lib" "${opus_output_dir}/lib/device/libopus.a"
+                else
+                    # Combine multiple device archs with lipo
+                    xcrun lipo "${opus_output_dir}/lib/device/libopus.a" "$opus_input_arch_lib" -create -output "${opus_output_dir}/lib/device/libopus.a.tmp"
+                    mv "${opus_output_dir}/lib/device/libopus.a.tmp" "${opus_output_dir}/lib/device/libopus.a"
+                fi
+            fi
         fi
     done
 
     echo "Copying headers..."
 
-    for arch in "${ARCHS[@]}"; do
-        if [ "${arch}" == "x86_64" ]; then
+    for arch in "${USE_ARCHS[@]}"; do
+        if [[ "$arch" == "arm64-simulator" ]]; then
+            PLATFORM="iPhoneSimulator"
+        elif [[ "$arch" == "x86_64" ]]; then
             PLATFORM="iPhoneSimulator"
         else
             PLATFORM="iPhoneOS"
@@ -487,7 +604,7 @@ function build_opus () {
         fi
     done
 
-    echo "Done building Opus"
+    echo "Done building Opus (platform-specific libraries)"
 }
 
 function download_pjsip () {
@@ -519,6 +636,8 @@ function clean_pjsip () {
         rm -rf $PJSIP_DIR
         rm -rf $PJSIP_FINAL_LIB_DIR
         rm -rf "${BASE_DIR}/VialerPJSIP.framework"
+        rm -rf "${BASE_DIR}/VialerPJSIP.xcframework"
+        rm -rf "${BASE_DIR}/Pod"
         echo "Done cleaning PJSIP source"
         echo "============================="
     fi
@@ -565,7 +684,12 @@ function build_archs () {
     echo "Building ABIs"
 
     for arch in "${USE_ARCHS[@]}"; do
-        configure_"$arch"
+        # Use the base arch name for configure function
+        if [[ "$arch" == "arm64-simulator" ]]; then
+            configure_arm64_sim
+        else
+            configure_"$arch"
+        fi
         _build $arch
         _collect $arch
     done
@@ -575,9 +699,19 @@ function build_archs () {
 }
 
 function configure_arm64 () {
-    echo "Configure for arm64"
+    echo "Configure for arm64 (device)"
     export CFLAGS="-miphoneos-version-min=$MIN_IOS_VERSION"
     export LDFLAGS=
+}
+
+function configure_arm64_sim () {
+    echo "Configure for arm64 (simulator)"
+    export DEVPATH=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer
+    export CFLAGS="-O2 -m64 -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=$MIN_IOS_VERSION"
+    export LDFLAGS="-O2 -m64 -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=$MIN_IOS_VERSION"
+    export MIN_IOS="-mios-simulator-version-min=$MIN_IOS_VERSION"
+    export PLATFORM="iPhoneSimulator"
+    export SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
 }
 
 function configure_x86_64 () {
@@ -615,6 +749,22 @@ function _build () {
 
     if [ $OPUS_SUPPORT = true ]; then
         configure="$configure --with-opus=${OPUS_BUILD_DIR}/dependencies"
+
+        opus_lib_dst="${OPUS_BUILD_DIR}/dependencies/lib/libopus.a"
+        if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+            opus_lib_src="${OPUS_BUILD_DIR}/dependencies/lib/simulator/libopus.a"
+        else
+            opus_lib_src="${OPUS_BUILD_DIR}/dependencies/lib/device/libopus.a"
+        fi
+
+        if [ ! -f "${opus_lib_src}" ]; then
+            echo "Missing Opus library for ${arch}: ${opus_lib_src}" >&2
+            exit 1
+        fi
+
+        mkdir -p "$(dirname "${opus_lib_dst}")"
+        rm -f "${opus_lib_dst}"
+        cp "${opus_lib_src}" "${opus_lib_dst}"
     fi
 
     if [ $H264_SUPPORT = true ]; then
@@ -624,13 +774,19 @@ function _build () {
     fi
 
     export LDFLAGS="${LDFLAGS} -lstdc++"
-    export MIN_IOS="-miphoneos-version-min=${MIN_IOS_VERSION}"
+    
+    # Only set MIN_IOS if it's not already set by configure function
+    if [ -z "$MIN_IOS" ]; then
+        export MIN_IOS="-miphoneos-version-min=${MIN_IOS_VERSION}"
+    fi
 
-    echo "Building for $arch"
+    echo "Building PJSIP for $arch"
 
     cp $PJSIP_CONFIG_SITE_H "$BASE_DIR/pjsip/src/pjlib/include/pj"
 
-    ARCH="-arch $arch" $configure >> $arch_log 2>&1 || exit
+    # Use the actual arch (without -simulator suffix) for PJSIP
+    actual_arch="${arch%%-*}"
+    ARCH="-arch $actual_arch" $configure >> $arch_log 2>&1 || exit
 
     make dep >> $arch_log 2>&1 &
     spinner $!
@@ -653,7 +809,7 @@ function _build () {
         fi
     fi
 
-    echo "Done building for $arch"
+    echo "Done building PJSIP for $arch"
     echo "============================="
 
     popd > /dev/null
@@ -665,7 +821,10 @@ function _collect () {
     cd $BASE_DIR
     mkdir -p "pjsip/temp/$1"
 
-    for x in `find pjsip/src -name *$1*.a`; do
+    # Use the actual arch name (without -simulator suffix) for finding libraries
+    actual_arch="${1%%-*}"
+    
+    for x in `find pjsip/src -name *${actual_arch}*.a`; do
         cp -v ./$x ./pjsip/temp/$1
     done | tee "$BASE_DIR"/pjsip/logs/collect.log
 
@@ -675,25 +834,72 @@ function _collect () {
 }
 
 function _merge () {
-    echo "MERGE"
+    echo "MERGE - Creating platform-specific libraries"
     cd $BASE_DIR
 
     mkdir -p "$BASE_DIR"/Pod
-    a_files=`find ./pjsip/temp -name *darwin_ios.a -exec printf '%s ' {} +`
 
-    if [ $SSL_SUPPORT = true ]; then
-        a_files="${a_files} ${SSL_BUILD_DIR}/lib/libssl.a ${SSL_BUILD_DIR}/lib/libcrypto.a"
+    # Separate architectures by platform
+    DEVICE_ARCHS=()
+    SIMULATOR_ARCHS=()
+    
+    for arch in "${USE_ARCHS[@]}"; do
+        if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+            SIMULATOR_ARCHS+=("$arch")
+        else
+            DEVICE_ARCHS+=("$arch")
+        fi
+    done
+
+    # Create device library if we have device architectures
+    if [ ${#DEVICE_ARCHS[@]} -gt 0 ]; then
+        echo "Creating device library for: ${DEVICE_ARCHS[@]}"
+        
+        device_a_files=""
+        for arch in "${DEVICE_ARCHS[@]}"; do
+            device_a_files="${device_a_files} `find ./pjsip/temp/${arch} -name *darwin_ios.a -exec printf '%s ' {} +`"
+        done
+
+        if [ $SSL_SUPPORT = true ]; then
+            device_a_files="${device_a_files} ${SSL_BUILD_DIR}/lib/device/libssl.a ${SSL_BUILD_DIR}/lib/device/libcrypto.a"
+        fi
+
+        if [ $OPUS_SUPPORT = true ]; then
+            device_a_files="${device_a_files} ${OPUS_BUILD_DIR}/dependencies/lib/device/libopus.a"
+        fi
+
+        if [ $H264_SUPPORT = true ]; then
+            device_a_files="${device_a_files} ${H264_BUILD_DIR}/lib/device/libopenh264.a"
+        fi
+
+        mkdir -p "$BASE_DIR/Pod/device"
+        libtool -o Pod/device/VialerPJSIP.a $device_a_files
     fi
 
-    if [ $OPUS_SUPPORT = true ]; then
-        a_files="${a_files} ${OPUS_BUILD_DIR}/dependencies/lib/libopus.a"
-    fi
+    # Create simulator library if we have simulator architectures
+    if [ ${#SIMULATOR_ARCHS[@]} -gt 0 ]; then
+        echo "Creating simulator library for: ${SIMULATOR_ARCHS[@]}"
+        
+        sim_a_files=""
+        for arch in "${SIMULATOR_ARCHS[@]}"; do
+            sim_a_files="${sim_a_files} `find ./pjsip/temp/${arch} -name *darwin_ios.a -exec printf '%s ' {} +`"
+        done
 
-    if [ $H264_SUPPORT = true ]; then
-        a_files="${a_files} ${H264_BUILD_DIR}/lib/libopenh264.a"
-    fi
+        if [ $SSL_SUPPORT = true ]; then
+            sim_a_files="${sim_a_files} ${SSL_BUILD_DIR}/lib/simulator/libssl.a ${SSL_BUILD_DIR}/lib/simulator/libcrypto.a"
+        fi
 
-    libtool -o Pod/VialerPJSIP.a $a_files
+        if [ $OPUS_SUPPORT = true ]; then
+            sim_a_files="${sim_a_files} ${OPUS_BUILD_DIR}/dependencies/lib/simulator/libopus.a"
+        fi
+
+        if [ $H264_SUPPORT = true ]; then
+            sim_a_files="${sim_a_files} ${H264_BUILD_DIR}/lib/simulator/libopenh264.a"
+        fi
+
+        mkdir -p "$BASE_DIR/Pod/simulator"
+        libtool -o Pod/simulator/VialerPJSIP.a $sim_a_files
+    fi
 }
 
 function clean_pjsip_libs_temp () {
@@ -704,7 +910,7 @@ function clean_pjsip_libs_temp () {
 function clean_pjsip_libs () {
     arch=$1
 
-    echo "Clean $arch lib direcotry"
+    echo "Clean $arch lib directory"
 
     for src_dir in ${PJSIP_LIB_PATHS[*]}; do
         dir="$PJSIP_SRC_DIR/${src_dir}"
@@ -766,92 +972,68 @@ function copy_to_lib_dir () {
     cp $old_path $d
 }
 
-function create_framework {
+function create_xcframework {
     PRODUCT_NAME="VialerPJSIP"
-    PUBLIC_HEADERS_FOLDER_PATH="${BASE_DIR}/Pod/vialer-pjsip-include"
-    LIBRARY_LOCATION="${BASE_DIR}/Pod/"
-    FRAMEWORK_LOCN="${BASE_DIR}/${PRODUCT_NAME}.framework"
-
-    echo "Creating the $PRODUCT_NAME framework in $FRAMEWORK_LOCN"
+    XCFRAMEWORK_LOCN="${BASE_DIR}/${PRODUCT_NAME}.xcframework"
+    
+    echo "Creating XCFramework at $XCFRAMEWORK_LOCN"
+    
+    # Remove old XCFramework if it exists
+    rm -rf ${XCFRAMEWORK_LOCN}
+    
+    # Prepare headers once (shared by all platforms)
     copy_headers
-
-    # Remove old framework.
-    echo "Remove old Framework"
-    rm -rf ${FRAMEWORK_LOCN}
-
-    # Create the path to the real Headers dir
-    mkdir -p "${FRAMEWORK_LOCN}/Versions/A/Headers"
-
-    # Create the required symlinks
-    ln -sfh A "${FRAMEWORK_LOCN}/Versions/Current"
-    ln -sfh "Versions/Current/Headers" "${FRAMEWORK_LOCN}/Headers"
-    ln -sfh "Versions/Current/${PRODUCT_NAME}" "${FRAMEWORK_LOCN}/${PRODUCT_NAME}"
-
-    # Copy the public headers into the framework
-    cp -a "${PUBLIC_HEADERS_FOLDER_PATH}/" "${FRAMEWORK_LOCN}/Versions/A/Headers"
-    cp -a "${LIBRARY_LOCATION}/${PRODUCT_NAME}.a" "${FRAMEWORK_LOCN}/Versions/A/${PRODUCT_NAME}"
-
-    echo "Adapting the framework's header files"
-i=0
-while IFS= read -r -d '' file; do
-    LC_ALL=C sed -i '' "s/include\ </include <$PRODUCT_NAME\//" "$file"
-    # To prevent $PRODUCT_NAME being inserted multiple times, run a second sed command
-    LC_ALL=C sed -i '' "s/<$PRODUCT_NAME\/$PRODUCT_NAME\//<$PRODUCT_NAME\//" "$file"
-
-    # DO NOT REPLACE the default C++ lib's, undo the change
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stdio.h/include\ <stdio.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stddef.h/include\ <stddef.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stdarg.h/include\ <stdarg.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/string.h/include\ <string.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stdlib.h/include\ <stdlib.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stdint.h/include\ <stdint.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/assert.h/include\ <assert.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/math.h/include\ <math.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/ctype.h/include\ <ctype.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/setjmp.h/include\ <setjmp.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/inttypes.h/include\ <inttypes.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/limits.h/include\ <limits.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/errno.h/include\ <errno.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/types.h/include\ <sys\/types.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/socket.h/include\ <sys\/socket.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/select.h/include\ <sys\/select.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/netinet\/in.h/include\ <netinet\/in.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/netinet\/ip.h/include\ <netinet\/ip.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/netinet\/in_systm.h/include\ <netinet\/in_systm.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/netinet\/tcp.h/include\ <netinet\/tcp.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/OpenGLES\/ES3\/glext.h/include\ <OpenGLES\/ES3\/glext.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/net\/if.h/include\ <net\/if.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/ifaddrs.h/include\ <ifaddrs.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/arpa\/inet.h/include\ <arpa\/inet.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/unistd.h/include\ <unistd.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/ioctl.h/include\ <sys\/ioctl.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/errno.h/include\ <errno.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/netdb.h/include\ <netdb.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/fcntl.h/include\ <fcntl.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/filio.h/include\ <sys\/filio.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/sockio.h/include\ <sys\/sockio.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/fcntl.h/include\ <fcntl.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/unistd.h/include\ <unistd.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/stdio.h/include\ <stdio.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/types.h/include\ <sys\/types.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/socket.h/include\ <sys\/socket.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/select.h/include\ <sys\/select.h/" "$file"
-    LC_ALL=C sed -i '' "s/include\ <$PRODUCT_NAME\/sys\/ioctl.h/include\ <sys\/ioctl.h/" "$file"
-
-
-    EXIT_CODE=$?
-    if [[ $EXIT_CODE != 0 ]]; then
-        echo "Error processing file ${file}"
+    PUBLIC_HEADERS_FOLDER_PATH="${BASE_DIR}/Pod/vialer-pjsip-include"
+    
+    # Separate architectures by platform
+    DEVICE_ARCHS=()
+    SIMULATOR_ARCHS=()
+    
+    for arch in "${USE_ARCHS[@]}"; do
+        if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+            SIMULATOR_ARCHS+=("$arch")
+        else
+            DEVICE_ARCHS+=("$arch")
+        fi
+    done
+    
+    # Build xcodebuild command with available libraries
+    echo "Creating XCFramework from static libraries..."
+    XCODEBUILD_CMD="xcodebuild -create-xcframework"
+    
+    if [ ${#DEVICE_ARCHS[@]} -gt 0 ] && [ -f "${BASE_DIR}/Pod/device/${PRODUCT_NAME}.a" ]; then
+        echo "Adding device library for architectures: ${DEVICE_ARCHS[@]}"
+        XCODEBUILD_CMD="${XCODEBUILD_CMD} -library ${BASE_DIR}/Pod/device/${PRODUCT_NAME}.a -headers ${PUBLIC_HEADERS_FOLDER_PATH}"
     fi
-
-    i=$((i+1))
-done < <(find "${FRAMEWORK_LOCN}/Versions/A/Headers" -type f -name "*.h" -print0)
-
-
-    # echo "$i files processed"
-
-    echo "Done create framework $PRODUCT_NAME"
-    echo "============================="
+    
+    if [ ${#SIMULATOR_ARCHS[@]} -gt 0 ] && [ -f "${BASE_DIR}/Pod/simulator/${PRODUCT_NAME}.a" ]; then
+        echo "Adding simulator library for architectures: ${SIMULATOR_ARCHS[@]}"
+        XCODEBUILD_CMD="${XCODEBUILD_CMD} -library ${BASE_DIR}/Pod/simulator/${PRODUCT_NAME}.a -headers ${PUBLIC_HEADERS_FOLDER_PATH}"
+    fi
+    
+    XCODEBUILD_CMD="${XCODEBUILD_CMD} -output ${XCFRAMEWORK_LOCN}"
+    
+    echo "Running: $XCODEBUILD_CMD"
+    eval $XCODEBUILD_CMD || exit 1
+    
+    echo ""
+    echo "======================================================================"
+    echo "SUCCESS! XCFramework created at:"
+    echo "  ${XCFRAMEWORK_LOCN}"
+    echo "======================================================================"
+    echo ""
+    
+    # Verify the XCFramework
+    if [ -d "${XCFRAMEWORK_LOCN}" ]; then
+        echo "XCFramework contents:"
+        ls -la "${XCFRAMEWORK_LOCN}"
+        echo ""
+        echo "To use this XCFramework in your Xcode project:"
+        echo "  1. Drag ${PRODUCT_NAME}.xcframework into your Xcode project"
+        echo "  2. In General → Frameworks, Libraries, and Embedded Content"
+        echo "  3. Set it to 'Embed & Sign'"
+        echo ""
+    fi
 }
 
 export -f copy_to_lib_dir
@@ -873,6 +1055,7 @@ else
     config_site
     build_archs
     _merge
-    create_framework
+    create_xcframework
 fi
+
 
