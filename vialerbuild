@@ -745,6 +745,32 @@ function _build () {
         configure="$configure --with-ssl=${SSL_BUILD_DIR}"
         export CFLAGS="${CFLAGS} -I${SSL_BUILD_DIR}/include"
         export LDFLAGS="${LDFLAGS} -L${SSL_BUILD_DIR}/lib"
+        
+        # Copy platform-specific SSL libraries to common location for PJSIP
+        ssl_lib_dst="${SSL_BUILD_DIR}/lib/libssl.a"
+        crypto_lib_dst="${SSL_BUILD_DIR}/lib/libcrypto.a"
+        
+        if [[ "$arch" == *"-simulator"* ]] || [[ "$arch" == "x86_64" ]]; then
+            ssl_lib_src="${SSL_BUILD_DIR}/lib/simulator/libssl.a"
+            crypto_lib_src="${SSL_BUILD_DIR}/lib/simulator/libcrypto.a"
+        else
+            ssl_lib_src="${SSL_BUILD_DIR}/lib/device/libssl.a"
+            crypto_lib_src="${SSL_BUILD_DIR}/lib/device/libcrypto.a"
+        fi
+        
+        if [ ! -f "${ssl_lib_src}" ]; then
+            echo "Missing SSL library for ${arch}: ${ssl_lib_src}" >&2
+            exit 1
+        fi
+        
+        if [ ! -f "${crypto_lib_src}" ]; then
+            echo "Missing Crypto library for ${arch}: ${crypto_lib_src}" >&2
+            exit 1
+        fi
+        
+        rm -f "${ssl_lib_dst}" "${crypto_lib_dst}"
+        cp "${ssl_lib_src}" "${ssl_lib_dst}"
+        cp "${crypto_lib_src}" "${crypto_lib_dst}"
     fi
 
     if [ $OPUS_SUPPORT = true ]; then
